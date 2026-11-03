@@ -72,7 +72,7 @@ impl OrderBook {
                 qty,
             } => match order_type {
                 OrderType::Limit { price } => self.new_limit(id, side, price, qty),
-                OrderType::Market => todo!("step 4"),
+                OrderType::Market => self.new_market(id, side, qty),
             },
             Command::Cancel { .. } => todo!("step 5"),
         }
@@ -114,6 +114,51 @@ impl OrderBook {
             });
         }
 
+        events
+    }
+
+    /// Handle a market order: match at any price, cancel the remainder.
+    fn new_market(&mut self, id: OrderId, side: Side, qty: Qty) -> Vec<Event> {
+        let mut events = Vec::new();
+
+        if qty.0 == 0 {
+            return vec![Event::Rejected {
+                id,
+                reason: RejectReason::ZeroQty,
+            }];
+        }
+
+        if self.index.contains_key(&id) {
+            return vec![Event::Rejected {
+                id,
+                reason: RejectReason::DuplicateId,
+            }];
+        }
+
+        let opposite_empty = match side {
+            Side::Buy => self.asks.is_empty(),
+            Side::Sell => self.bids.is_empty(),
+        };
+
+        if opposite_empty {
+            return vec![Event::Rejected {
+                id,
+                reason: RejectReason::NoLiquidity,
+            }];
+        }
+
+        // TODO 3: events with Accepted, then match_order with limit None
+        events.push(Event::Accepted { id });
+
+        let remaining = self.match_order(id, side, None, qty, &mut events);
+
+        // TODO 4: if something remained → push Event::Cancelled { id, remaining }
+
+        if remaining.0 > 0 {
+            events.push(Event::Cancelled { id, remaining });
+        }
+
+        // TODO 5: return events
         events
     }
 
@@ -346,5 +391,97 @@ mod tests {
         assert_eq!(book.best_ask(), None);
         assert_eq!(book.best_bid(), Some(Price(101)));
         assert_eq!(book.order_count(), 1);
+    }
+
+    fn market(id: u64, side: Side, qty: u64) -> Command {
+        Command::NewOrder {
+            id: OrderId(id),
+            side,
+            order_type: OrderType::Market,
+            qty: Qty(qty),
+        }
+    }
+
+    /// Extract (maker_id, price, qty) of every trade, for short assertions.
+    fn trades(events: &[Event]) -> Vec<(u64, u64, u64)> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Trade(t) => Some((t.maker_id.0, t.price.0, t.qty.0)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn limit_sweeps_multiple_levels() {
+        let mut book = OrderBook::new();
+        book.process(limit(2, Side::Sell, 101, 3));
+        book.process(limit(5, Side::Sell, 102, 5));
+        let events = book.process(limit(9, Side::Buy, 102, 6));
+        assert_eq!(trades(&events), vec![(2, 101, 3), (5, 102, 3)]);
+        assert_eq!(book.best_ask(), Some(Price(102)));
+        assert_eq!(book.best_bid(), None);
+        assert_eq!(book.order_count(), 1);
+    }
+
+    #[test]
+    fn fifo_within_level() {
+        let mut book = OrderBook::new();
+        book.process(limit(1, Side::Sell, 101, 2));
+        book.process(limit(2, Side::Sell, 101, 2));
+        let events = book.process(limit(9, Side::Buy, 101, 3));
+        assert_eq!(trades(&events), vec![(1, 101, 2), (2, 101, 1)]);
+        assert_eq!(book.order_count(), 1);
+    }
+
+    #[test]
+    fn trade_happens_at_maker_price() {
+        let mut book = OrderBook::new();
+        book.process(limit(1, Side::Buy, 100, 5));
+        let events = book.process(limit(9, Side::Sell, 95, 5));
+        assert_eq!(trades(&events), vec![(1, 100, 5)]);
+    }
+
+    #[test]
+    fn market_order_on_empty_book_is_rejected() {
+        let mut book = OrderBook::new();
+        let events = book.process(market(1, Side::Buy, 5));
+        assert_eq!(
+            events,
+            vec![Event::Rejected {
+                id: OrderId(1),
+                reason: RejectReason::NoLiquidity
+            }]
+        );
+    }
+
+    #[test]
+    fn market_order_sweeps_and_cancels_remainder() {
+        let mut book = OrderBook::new();
+        book.process(limit(1, Side::Sell, 101, 2));
+        book.process(limit(2, Side::Sell, 105, 1));
+        let events = book.process(market(9, Side::Buy, 5));
+        assert_eq!(trades(&events), vec![(1, 101, 2), (2, 105, 1)]);
+        assert_eq!(
+            events.last(),
+            Some(&Event::Cancelled {
+                id: OrderId(9),
+                remaining: Qty(2)
+            })
+        );
+        assert_eq!(book.order_count(), 0);
+        assert_eq!(book.best_bid(), None);
+    }
+
+    #[test]
+    fn market_order_never_rests() {
+        let mut book = OrderBook::new();
+        book.process(limit(1, Side::Buy, 100, 10));
+        let events = book.process(market(9, Side::Sell, 4));
+        assert_eq!(trades(&events), vec![(1, 100, 4)]);
+        assert!(!events.iter().any(|e| matches!(e, Event::Cancelled { .. })));
+        assert_eq!(book.best_bid(), Some(Price(100)));
+        assert_eq!(book.best_ask(), None);
     }
 }
