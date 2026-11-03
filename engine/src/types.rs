@@ -1,14 +1,18 @@
+use serde::{Deserialize, Serialize};
+
 /// Price in ticks (e.g. 1 tick = 1 cent). Never use floats for money.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Price(pub u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default,
+)]
 pub struct Qty(pub u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OrderId(pub u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
     Buy,
     Sell,
@@ -23,13 +27,13 @@ impl Side {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderType {
     Limit { price: Price },
     Market,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Order {
     pub id: OrderId,
     pub side: Side,
@@ -37,7 +41,7 @@ pub struct Order {
     pub qty: Qty,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Trade {
     pub maker_id: OrderId,
     pub taker_id: OrderId,
@@ -46,7 +50,7 @@ pub struct Trade {
     pub qty: Qty,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RejectReason {
     ZeroQty,
     DuplicateId,
@@ -54,7 +58,8 @@ pub enum RejectReason {
     NoLiquidity,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "type")]
 pub enum Command {
     NewOrder {
         id: OrderId,
@@ -68,7 +73,8 @@ pub enum Command {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "type")]
 pub enum Event {
     Accepted { id: OrderId },
 
@@ -127,5 +133,17 @@ mod tests {
             qty: Qty(5),
         };
         assert_eq!(Event::Trade(t), Event::Trade(t));
+    }
+
+    #[test]
+    fn command_json_round_trip() {
+        let cmd = Command::NewOrder {
+            id: OrderId(1),
+            side: Side::Buy,
+            order_type: OrderType::Limit { price: Price(101) },
+            qty: Qty(5),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), cmd);
     }
 }
