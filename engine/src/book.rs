@@ -74,7 +74,7 @@ impl OrderBook {
                 OrderType::Limit { price } => self.new_limit(id, side, price, qty),
                 OrderType::Market => self.new_market(id, side, qty),
             },
-            Command::Cancel { .. } => todo!("step 5"),
+            Command::Cancel { id } => self.cancel(id),
         }
     }
 
@@ -147,19 +147,58 @@ impl OrderBook {
             }];
         }
 
-        // TODO 3: events with Accepted, then match_order with limit None
         events.push(Event::Accepted { id });
 
         let remaining = self.match_order(id, side, None, qty, &mut events);
-
-        // TODO 4: if something remained → push Event::Cancelled { id, remaining }
 
         if remaining.0 > 0 {
             events.push(Event::Cancelled { id, remaining });
         }
 
-        // TODO 5: return events
         events
+    }
+
+    fn cancel(&mut self, id: OrderId) -> Vec<Event> {
+        let Some((side, price)) = self.index.remove(&id) else {
+            return vec![Event::Rejected {
+                id,
+                reason: RejectReason::UnknownOrder,
+            }];
+        };
+
+        let book_side = match side {
+            Side::Buy => &mut self.bids,
+            Side::Sell => &mut self.asks,
+        };
+        let level = book_side
+            .get_mut(&price)
+            .expect("indexed order has a level");
+
+        let pos = level
+            .orders
+            .iter()
+            .position(|o| o.id == id)
+            .expect("indexed order is on its level");
+        let order = level.orders.remove(pos).expect("position is valid");
+
+        level.total.0 -= order.qty.0;
+        let level_total = level.total;
+
+        if level.orders.is_empty() {
+            book_side.remove(&price);
+        }
+
+        vec![
+            Event::Cancelled {
+                id,
+                remaining: order.qty,
+            },
+            Event::BookUpdate {
+                side,
+                price,
+                qty: level_total,
+            },
+        ]
     }
 
     fn match_order(
@@ -482,6 +521,84 @@ mod tests {
         assert_eq!(trades(&events), vec![(1, 100, 4)]);
         assert!(!events.iter().any(|e| matches!(e, Event::Cancelled { .. })));
         assert_eq!(book.best_bid(), Some(Price(100)));
+        assert_eq!(book.best_ask(), None);
+    }
+    #[test]
+    fn cancel_removes_order() {
+        let mut book = OrderBook::new();
+        book.process(limit(1, Side::Buy, 100, 5));
+        book.process(limit(2, Side::Buy, 100, 3));
+        let events = book.process(Command::Cancel { id: OrderId(1) });
+        assert_eq!(
+            events,
+            vec![
+                Event::Cancelled {
+                    id: OrderId(1),
+                    remaining: Qty(5)
+                },
+                Event::BookUpdate {
+                    side: Side::Buy,
+                    price: Price(100),
+                    qty: Qty(3)
+                },
+            ]
+        );
+        assert_eq!(book.order_count(), 1);
+        // the cancelled order must not trade anymore
+        let ev = book.process(limit(9, Side::Sell, 100, 3));
+        assert_eq!(trades(&ev), vec![(2, 100, 3)]);
+    }
+
+    #[test]
+    fn cancel_last_order_removes_level() {
+        let mut book = OrderBook::new();
+        book.process(limit(1, Side::Sell, 101, 5));
+        book.process(Command::Cancel { id: OrderId(1) });
+        assert_eq!(book.best_ask(), None);
+        assert_eq!(book.order_count(), 0);
+    }
+
+    #[test]
+    fn cancel_unknown_is_rejected() {
+        let mut book = OrderBook::new();
+        let ev = book.process(Command::Cancel { id: OrderId(7) });
+        assert_eq!(
+            ev,
+            vec![Event::Rejected {
+                id: OrderId(7),
+                reason: RejectReason::UnknownOrder
+            }]
+        );
+    }
+
+    #[test]
+    fn cancel_filled_order_is_rejected() {
+        let mut book = OrderBook::new();
+        book.process(limit(1, Side::Sell, 101, 2));
+        book.process(limit(2, Side::Buy, 101, 2));
+        let ev = book.process(Command::Cancel { id: OrderId(1) });
+        assert_eq!(
+            ev,
+            vec![Event::Rejected {
+                id: OrderId(1),
+                reason: RejectReason::UnknownOrder
+            }]
+        );
+    }
+
+    #[test]
+    fn cancel_partially_filled_returns_remaining() {
+        let mut book = OrderBook::new();
+        book.process(limit(1, Side::Sell, 101, 5));
+        book.process(limit(2, Side::Buy, 101, 2));
+        let ev = book.process(Command::Cancel { id: OrderId(1) });
+        assert_eq!(
+            ev[0],
+            Event::Cancelled {
+                id: OrderId(1),
+                remaining: Qty(3)
+            }
+        );
         assert_eq!(book.best_ask(), None);
     }
 }
