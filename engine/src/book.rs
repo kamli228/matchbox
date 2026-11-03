@@ -601,4 +601,48 @@ mod tests {
         );
         assert_eq!(book.best_ask(), None);
     }
+
+    #[test]
+    fn sell_limit_sweeps_bids_from_highest() {
+        let mut book = OrderBook::new();
+        book.process(limit(1, Side::Buy, 100, 2));
+        book.process(limit(2, Side::Buy, 99, 2));
+        let events = book.process(limit(9, Side::Sell, 99, 3));
+        assert_eq!(trades(&events), vec![(1, 100, 2), (2, 99, 1)]);
+        assert_eq!(book.best_bid(), Some(Price(99)));
+        assert_eq!(book.order_count(), 1);
+    }
+
+    #[test]
+    fn market_zero_qty_is_rejected() {
+        let mut book = OrderBook::new();
+        book.process(limit(1, Side::Sell, 101, 5));
+        let events = book.process(market(2, Side::Buy, 0));
+        assert_eq!(
+            events,
+            vec![Event::Rejected {
+                id: OrderId(2),
+                reason: RejectReason::ZeroQty
+            }]
+        );
+        assert_eq!(book.order_count(), 1);
+    }
+
+    #[test]
+    fn book_update_reports_level_total() {
+        let mut book = OrderBook::new();
+        book.process(limit(1, Side::Buy, 100, 5));
+        let events = book.process(limit(2, Side::Buy, 100, 3));
+        assert_eq!(
+            events,
+            vec![
+                Event::Accepted { id: OrderId(2) },
+                Event::BookUpdate {
+                    side: Side::Buy,
+                    price: Price(100),
+                    qty: Qty(8)
+                },
+            ]
+        );
+    }
 }
