@@ -75,6 +75,32 @@ impl OrderBook {
         tot
     }
 
+    /// Panic if any book invariant is broken (tests only).
+    #[cfg(test)]
+    fn check_invariants(&self) {
+        if let (Some(bid), Some(ask)) = (self.best_bid(), self.best_ask()) {
+            assert!(bid < ask, "book is crossed: bid {bid:?} >= ask {ask:?}");
+        }
+
+        let mut count = 0;
+        for (side, map) in [(Side::Buy, &self.bids), (Side::Sell, &self.asks)] {
+            for (price, level) in map {
+                assert!(!level.orders.is_empty(), "empty level at {price:?}");
+                let mut sum = 0;
+                for order in &level.orders {
+                    assert!(order.qty.0 > 0, "zero-qty order {:?}", order.id);
+                    assert_eq!(order.side, side);
+                    assert_eq!(order.price, *price);
+                    assert_eq!(self.index.get(&order.id), Some(&(side, *price)));
+                    sum += order.qty.0;
+                    count += 1;
+                }
+                assert_eq!(level.total.0, sum, "wrong total at {price:?}");
+            }
+        }
+        assert_eq!(self.index.len(), count, "forgot to delete order");
+    }
+
     /// apply one command and return resulting events
     pub fn process(&mut self, cmd: Command) -> Vec<Event> {
         match cmd {
@@ -657,5 +683,44 @@ mod tests {
                 },
             ]
         );
+    }
+
+    use proptest::prelude::*;
+
+    fn arb_side() -> impl Strategy<Value = Side> {
+        prop_oneof![Just(Side::Buy), Just(Side::Sell)]
+    }
+
+    fn arb_command() -> impl Strategy<Value = Command> {
+        prop_oneof![
+            6 => (1u64..50, arb_side(), 95u64..106, 0u64..10).prop_map(|(id, side, price, qty)| {
+                Command::NewOrder {
+                    id: OrderId(id),
+                    side,
+                    order_type: OrderType::Limit { price: Price(price) },
+                    qty: Qty(qty),
+                }
+            }),
+            2 => (1u64..50, arb_side(), 0u64..10).prop_map(|(id, side, qty)| Command::NewOrder {
+                id: OrderId(id),
+                side,
+                order_type: OrderType::Market,
+                qty: Qty(qty),
+            }),
+            2 => (1u64..50).prop_map(|id| Command::Cancel { id: OrderId(id) }),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn invariants_hold_after_every_command(
+            cmds in prop::collection::vec(arb_command(), 0..200)
+        ) {
+            let mut book = OrderBook::new();
+            for cmd in cmds {
+                book.process(cmd);
+                book.check_invariants();
+            }
+        }
     }
 }
