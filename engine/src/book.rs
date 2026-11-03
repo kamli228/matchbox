@@ -216,7 +216,7 @@ impl OrderBook {
         let pos = level
             .orders
             .iter()
-            .position(|o| o.id == id)
+            .rposition(|o| o.id == id)
             .expect("indexed order is on its level");
         let order = level.orders.remove(pos).expect("position is valid");
 
