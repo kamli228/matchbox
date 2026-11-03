@@ -2,7 +2,9 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
-use crate::types::{Command, Event, Order, OrderId, OrderType, Price, Qty, RejectReason, Side};
+use crate::types::{
+    Command, Event, Order, OrderId, OrderType, Price, Qty, RejectReason, Side, Trade,
+};
 
 /// all order at one price - in arrival order FIFO.
 #[derive(Debug, Default)]
@@ -96,21 +98,81 @@ impl OrderBook {
 
         events.push(Event::Accepted { id });
 
-        // (matching loop — next part)
+        let mut remaining = qty;
+        let opposite = side.opposite();
 
-        // TODO 4: put the whole order into the book with self.rest(...)
-        //         and push a BookUpdate for its level
-        let total = self.rest(Order {
-            id,
-            side,
-            price,
-            qty,
-        });
-        events.push(Event::BookUpdate {
-            side,
-            price,
-            qty: total,
-        });
+        while remaining.0 > 0 {
+            let best = match side {
+                Side::Buy => self.best_ask(),
+                Side::Sell => self.best_bid(),
+            };
+            let Some(best) = best else {
+                break;
+            };
+
+            let crosses = match side {
+                Side::Buy => price >= best,
+                Side::Sell => price <= best,
+            };
+            if !crosses {
+                break;
+            }
+
+            let book_side = match opposite {
+                Side::Buy => &mut self.bids,
+                Side::Sell => &mut self.asks,
+            };
+            let level = book_side.get_mut(&best).expect("best level exists");
+            let maker = level.orders.front_mut().expect("level is never empty");
+
+            let fill = remaining.min(maker.qty);
+
+            maker.qty.0 -= fill.0;
+            level.total.0 -= fill.0;
+            remaining.0 -= fill.0;
+
+            let maker_id = maker.id;
+            let maker_done = maker.qty.0 == 0;
+
+            events.push(Event::Trade(Trade {
+                maker_id,
+                taker_id: id,
+                taker_side: side,
+                price: best,
+                qty: fill,
+            }));
+
+            if maker_done {
+                level.orders.pop_front();
+                self.index.remove(&maker_id);
+            }
+
+            let level_total = level.total;
+
+            if level.orders.is_empty() {
+                book_side.remove(&best);
+            }
+
+            events.push(Event::BookUpdate {
+                side: opposite,
+                price: best,
+                qty: level_total,
+            });
+        }
+
+        if remaining.0 > 0 {
+            let total = self.rest(Order {
+                id,
+                side,
+                price,
+                qty: remaining,
+            });
+            events.push(Event::BookUpdate {
+                side,
+                price,
+                qty: total,
+            });
+        }
 
         events
     }
@@ -237,5 +299,38 @@ mod tests {
             ]
         );
         assert_eq!(book.best_bid(), Some(Price(100)));
+    }
+
+    #[test]
+    fn partial_fill_rests_remainder() {
+        let mut book = OrderBook::new();
+        book.process(limit(2, Side::Sell, 101, 3));
+        let events = book.process(limit(9, Side::Buy, 101, 4));
+        assert_eq!(
+            events,
+            vec![
+                Event::Accepted { id: OrderId(9) },
+                Event::Trade(Trade {
+                    maker_id: OrderId(2),
+                    taker_id: OrderId(9),
+                    taker_side: Side::Buy,
+                    price: Price(101),
+                    qty: Qty(3),
+                }),
+                Event::BookUpdate {
+                    side: Side::Sell,
+                    price: Price(101),
+                    qty: Qty(0)
+                },
+                Event::BookUpdate {
+                    side: Side::Buy,
+                    price: Price(101),
+                    qty: Qty(1)
+                },
+            ]
+        );
+        assert_eq!(book.best_ask(), None);
+        assert_eq!(book.best_bid(), Some(Price(101)));
+        assert_eq!(book.order_count(), 1);
     }
 }
