@@ -98,6 +98,33 @@ impl OrderBook {
 
         events.push(Event::Accepted { id });
 
+        let remaining = self.match_order(id, side, Some(price), qty, &mut events);
+
+        if remaining.0 > 0 {
+            let total = self.rest(Order {
+                id,
+                side,
+                price,
+                qty: remaining,
+            });
+            events.push(Event::BookUpdate {
+                side,
+                price,
+                qty: total,
+            });
+        }
+
+        events
+    }
+
+    fn match_order(
+        &mut self,
+        id: OrderId,
+        side: Side,
+        limit: Option<Price>,
+        qty: Qty,
+        events: &mut Vec<Event>,
+    ) -> Qty {
         let mut remaining = qty;
         let opposite = side.opposite();
 
@@ -110,9 +137,10 @@ impl OrderBook {
                 break;
             };
 
-            let crosses = match side {
-                Side::Buy => price >= best,
-                Side::Sell => price <= best,
+            let crosses = match (side, limit) {
+                (_, None) => true,
+                (Side::Buy, Some(price)) => price >= best,
+                (Side::Sell, Some(price)) => price <= best,
             };
             if !crosses {
                 break;
@@ -160,21 +188,7 @@ impl OrderBook {
             });
         }
 
-        if remaining.0 > 0 {
-            let total = self.rest(Order {
-                id,
-                side,
-                price,
-                qty: remaining,
-            });
-            events.push(Event::BookUpdate {
-                side,
-                price,
-                qty: total,
-            });
-        }
-
-        events
+        remaining
     }
 }
 
