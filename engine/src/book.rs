@@ -38,6 +38,19 @@ impl OrderBook {
         self.asks.first_key_value().map(|(price, _level)| *price)
     }
 
+    /// Top `levels` price levels of one side, best price first: (price, total qty).
+    pub fn depth(&self, side: Side, levels: usize) -> Vec<(Price, Qty)> {
+        let map = match side {
+            Side::Buy => &self.bids,
+            Side::Sell => &self.asks,
+        };
+        let to_pair = |(price, level): (&Price, &Level)| (*price, level.total);
+        match side {
+            Side::Buy => map.iter().rev().take(levels).map(to_pair).collect(),
+            Side::Sell => map.iter().take(levels).map(to_pair).collect(),
+        }
+    }
+
     /// number of orders which are currently in the book
     pub fn order_count(&self) -> usize {
         self.index.len()
