@@ -41,6 +41,21 @@ impl OrderBook {
         self.index.len()
     }
 
+    /// put an order into the book at its price (no matching)
+    #[allow(dead_code)]
+    fn rest(&mut self, order: Order) {
+        let book_side = match order.side {
+            Side::Buy => &mut self.bids,
+            Side::Sell => &mut self.asks,
+        };
+
+        let level = book_side.entry(order.price).or_default();
+
+        level.total.0 += order.qty.0;
+        level.orders.push_back(order);
+        self.index.insert(order.id, (order.side, order.price));
+    }
+
     /// apply one command and return resulting events
     pub fn process(&mut self, cmd: Command) -> Vec<Event> {
         match cmd {
@@ -90,5 +105,28 @@ mod tests {
         }
         assert_eq!(book.best_bid(), Some(Price(100)));
         assert_eq!(book.best_ask(), Some(Price(101)));
+    }
+
+    #[test]
+    fn rest_puts_orders_on_the_right_side() {
+        let mut book = OrderBook::new();
+        book.rest(order(1, Side::Buy, 100, 5));
+        book.rest(order(2, Side::Sell, 101, 3));
+
+        assert_eq!(book.best_bid(), Some(Price(100)));
+        assert_eq!(book.best_ask(), Some(Price(101)));
+        assert_eq!(book.order_count(), 2);
+    }
+
+    #[test]
+    fn rest_keeps_fifo_and_total_on_one_level() {
+        let mut book = OrderBook::new();
+        book.rest(order(1, Side::Buy, 100, 5));
+        book.rest(order(2, Side::Buy, 100, 3));
+
+        let level = &book.bids[&Price(100)];
+        assert_eq!(level.total, Qty(8));
+        let ids: Vec<OrderId> = level.orders.iter().map(|o| o.id).collect();
+        assert_eq!(ids, vec![OrderId(1), OrderId(2)]);
     }
 }
