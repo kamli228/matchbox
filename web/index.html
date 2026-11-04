@@ -70,6 +70,15 @@
   .spread .stat { align-self: center; }
 
   #chart { flex: 1; min-height: 0; }
+  .chart-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px 6px 14px; border-bottom: 1px solid var(--line); }
+  .chart-head h2 { padding: 0; border: 0; }
+  .tf { display: flex; gap: 4px; }
+  .tf button {
+    padding: 3px 9px; font-size: 12px; font-weight: 600; border-radius: 5px;
+    background: transparent; border: 1px solid transparent; color: var(--muted);
+  }
+  .tf button:hover { color: var(--text); }
+  .tf button.active { color: var(--text); background: var(--bg); border-color: var(--line); }
 
   #form-panel .body { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 14px; }
   label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
@@ -145,7 +154,16 @@
   </section>
 
   <section class="panel" id="chart-panel">
-    <h2>Price · 5s candles</h2>
+    <div class="chart-head">
+      <h2>Price</h2>
+      <div class="tf" id="timeframes">
+        <button data-sec="1">1s</button>
+        <button data-sec="5">5s</button>
+        <button data-sec="15">15s</button>
+        <button data-sec="60">1m</button>
+        <button data-sec="300">5m</button>
+      </div>
+    </div>
     <div id="chart"></div>
   </section>
 
@@ -188,7 +206,7 @@ const toTicks = (eur) => Math.round(Number(eur) * 100);
 
 const BOOK_ROWS = 14;
 const TAPE_ROWS = 60;
-const CANDLE_SECONDS = 5;
+const MAX_HISTORY = 100000;    // trades kept in memory to rebuild candles
 
 const $ = (id) => document.getElementById(id);
 
@@ -207,23 +225,62 @@ const candles = chart.addCandlestickSeries({
   priceFormat: { type: "price", precision: 2, minMove: 0.01 },
 });
 let candle = null;
+let candleSeconds = 5;
+const priceHistory = [];       // { time, price } of every trade since the page opened
+
+// the chart shows UTC, so shift by the local offset to display local time
+const localNow = () => Math.floor(Date.now() / 1000) - new Date().getTimezoneOffset() * 60;
+
+// merge one trade into the candle list for the current timeframe
+function nextCandle(current, time, price) {
+  const bucket = time - (time % candleSeconds);
+  if (!current || current.time !== bucket) {
+    const open = current ? current.close : price;
+    return { time: bucket, open, high: Math.max(open, price), low: Math.min(open, price), close: price };
+  }
+  return {
+    ...current,
+    high: Math.max(current.high, price),
+    low: Math.min(current.low, price),
+    close: price,
+  };
+}
 
 function addToChart(priceTicks) {
-  // the chart shows UTC, so shift by the local offset to display local time
-  const now = Math.floor(Date.now() / 1000) - new Date().getTimezoneOffset() * 60;
-  const bucket = now - (now % CANDLE_SECONDS);
-  const price = priceTicks / 100;
-  if (!candle || candle.time !== bucket) {
-    candle = { time: bucket, open: candle ? candle.close : price, high: price, low: price, close: price };
-    candle.high = Math.max(candle.open, price);
-    candle.low = Math.min(candle.open, price);
-  } else {
-    candle.high = Math.max(candle.high, price);
-    candle.low = Math.min(candle.low, price);
-    candle.close = price;
-  }
+  const point = { time: localNow(), price: priceTicks / 100 };
+  priceHistory.push(point);
+  if (priceHistory.length > MAX_HISTORY) priceHistory.shift();
+  candle = nextCandle(candle, point.time, point.price);
   candles.update({ ...candle });
 }
+
+// switch timeframe: rebuild all candles from the trade history
+function setTimeframe(seconds) {
+  candleSeconds = seconds;
+  const data = [];
+  candle = null;
+  for (const point of priceHistory) {
+    const updated = nextCandle(candle, point.time, point.price);
+    if (candle && updated.time === candle.time) data[data.length - 1] = updated;
+    else data.push(updated);
+    candle = updated;
+  }
+  candles.setData(data);
+  chart.timeScale().fitContent();
+  for (const button of $("timeframes").children) {
+    button.classList.toggle("active", Number(button.dataset.sec) === seconds);
+  }
+  try { localStorage.setItem("matchbox.timeframe", String(seconds)); } catch {}
+}
+
+$("timeframes").addEventListener("click", (e) => {
+  const seconds = Number(e.target.dataset.sec);
+  if (seconds) setTimeframe(seconds);
+});
+
+let savedTimeframe = 5;
+try { savedTimeframe = Number(localStorage.getItem("matchbox.timeframe")) || 5; } catch {}
+setTimeframe(savedTimeframe);
 
 // ---------- state ----------
 let latestBook = null;       // newest snapshot, drawn on the next animation frame
