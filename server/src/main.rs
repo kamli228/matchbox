@@ -12,6 +12,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use axum::routing::get;
 use engine::book::OrderBook;
+use engine::journal::{self, Journal};
 use engine::types::{Command, Event, OrderId, OrderType, Price, Qty, Side};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, watch};
@@ -19,6 +20,8 @@ use tower_http::services::ServeDir;
 
 /// How many price levels per side are sent to clients.
 const DEPTH: usize = 20;
+/// File where every accepted command is appended.
+const JOURNAL_PATH: &str = "matchbox.journal";
 
 /// What a client may send us (JSON). The server assigns order ids itself.
 #[derive(Deserialize, Debug)]
@@ -55,13 +58,25 @@ async fn main() {
     let (events_tx, _) = broadcast::channel::<Event>(10_000);
     let (book_tx, book_rx) = watch::channel(BookSnapshot::default());
 
-    tokio::spawn(run_engine(cmd_rx, events_tx.clone(), book_tx));
+    // restore the book from the journal before accepting new commands
+    let history = journal::replay(JOURNAL_PATH).expect("journal is readable");
+    let next_id = max_order_id(&history) + 1;
+    println!("replayed {} commands from {JOURNAL_PATH}", history.len());
+    let journal = Journal::open(JOURNAL_PATH).expect("journal can be opened");
+
+    tokio::spawn(run_engine(
+        history,
+        journal,
+        cmd_rx,
+        events_tx.clone(),
+        book_tx,
+    ));
 
     let state = AppState {
         cmd_tx,
         events_tx,
         book_rx,
-        next_id: Arc::new(AtomicU64::new(1)),
+        next_id: Arc::new(AtomicU64::new(next_id)),
     };
 
     let app = Router::new()
@@ -79,12 +94,26 @@ async fn main() {
 
 /// The only place that touches the order book: one command at a time.
 async fn run_engine(
+    history: Vec<Command>,
+    mut journal: Journal,
     mut cmd_rx: mpsc::Receiver<Command>,
     events_tx: broadcast::Sender<Event>,
     book_tx: watch::Sender<BookSnapshot>,
 ) {
     let mut book = OrderBook::new();
+    for cmd in history {
+        book.process(cmd);
+    }
+    book_tx.send_replace(BookSnapshot {
+        bids: book.depth(Side::Buy, DEPTH),
+        asks: book.depth(Side::Sell, DEPTH),
+    });
+
     while let Some(cmd) = cmd_rx.recv().await {
+        // write first, then apply: a crash can never lose a command that changed the book
+        if let Err(err) = journal.append(&cmd) {
+            eprintln!("journal write failed: {err}");
+        }
         for event in book.process(cmd) {
             // an error only means nobody is connected right now
             let _ = events_tx.send(event);
@@ -94,6 +123,18 @@ async fn run_engine(
             asks: book.depth(Side::Sell, DEPTH),
         });
     }
+}
+
+/// Highest order id in the journal, so new ids continue after it.
+fn max_order_id(history: &[Command]) -> u64 {
+    history
+        .iter()
+        .filter_map(|cmd| match cmd {
+            Command::NewOrder { id, .. } => Some(id.0),
+            Command::Cancel { .. } => None,
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
