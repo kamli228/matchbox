@@ -84,11 +84,16 @@ async fn main() {
         .fallback_service(ServeDir::new("web"))
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+    // hosting platforms tell us the port via the PORT variable; locally it's 3000
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(3000);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr)
         .await
-        .expect("port 3000 is free");
-    println!("Matchbox listening on http://localhost:3000");
+        .expect("port is free");
+    println!("Matchbox listening on http://localhost:{port}");
     axum::serve(listener, app).await.expect("server runs");
 }
 

@@ -12,8 +12,6 @@ use serde_json::{Value, json};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
-const URL: &str = "ws://localhost:3000/ws";
-
 #[tokio::main]
 async fn main() {
     let rate: u64 = std::env::args()
@@ -22,9 +20,10 @@ async fn main() {
         .unwrap_or(100)
         .max(1);
 
-    let (ws, _) = connect_async(URL)
+    let url = std::env::var("MATCHBOX_URL").unwrap_or_else(|_| "ws://localhost:3000/ws".into());
+    let (ws, _) = connect_async(url.as_str())
         .await
-        .expect("server is running on localhost:3000");
+        .expect("server is running");
     let (mut write, mut read) = ws.split();
     println!("bot connected, sending {rate} orders/s (Ctrl+C to stop)");
 

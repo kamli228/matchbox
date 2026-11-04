@@ -238,7 +238,9 @@ const sentIds = new Set();   // every id the server assigned to us
 // ---------- websocket ----------
 let ws;
 function connect() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
+  // on https the socket must be secure too (wss), locally plain ws is fine
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${scheme}://${location.host}/ws`);
   ws.onopen = () => { $("dot").classList.add("on"); $("status").textContent = "live"; };
   ws.onclose = () => {
     $("dot").classList.remove("on");
