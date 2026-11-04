@@ -3,7 +3,7 @@
 
 **A single-threaded exchange matching engine in Rust, with a WebSocket API, a command journal and a live order book in the browser.**
 
-🔗 **Live demo:** <!-- TODO: paste the Render URL here --> `https://<your-app>.onrender.com` (free tier: the first visit after a quiet period takes about a minute to wake up)
+🔗 **Live demo:** https://matchbox-iub2.onrender.com/ (free tier: the first visit after a quiet period takes about a minute to wake up)
 
 ![Matchbox web UI: order book, candle chart, trade tape and order form](docs/screenshot.png)
 
