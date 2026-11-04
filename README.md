@@ -140,10 +140,6 @@ The `Dockerfile` builds the server and both bots; `start.sh` runs all three, so 
 - Multiple instruments (one book per symbol), accounts and balances.
 - Metrics (Prometheus) and a network-level load test.
 
-## How it was built
-
-Built in three days as a portfolio project while learning Rust (coming from C++). I wrote the engine core myself — order book, matching, market orders, cancellation, journal, invariant checks — using Claude as a tutor and code reviewer. The server, bots, web page and deployment were generated with AI assistance and then integrated, tested and reviewed by me, so I could focus my time on the engine and the architecture.
-
 ## License
 
 MIT
