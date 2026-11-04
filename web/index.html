@@ -1,3 +1,412 @@
 <!doctype html>
-<title>Matchbox</title>
-<p>Order book UI coming soon.</p>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matchbox Exchange</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg: #0f1218;
+    --panel: #161b23;
+    --line: #232a35;
+    --text: #d7dde6;
+    --muted: #7d8897;
+    --buy: #1fbf75;
+    --sell: #f0475b;
+    --buy-bg: rgba(31, 191, 117, 0.14);
+    --sell-bg: rgba(240, 71, 91, 0.14);
+    --accent: #4c8dff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .num { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums; }
+  header {
+    display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+    padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  .brand { font-weight: 700; font-size: 18px; letter-spacing: 0.5px; }
+  .brand span { color: var(--accent); }
+  .pair { font-weight: 600; }
+  .last { font-size: 20px; font-weight: 700; }
+  .stat { color: var(--muted); font-size: 12px; }
+  .stat b { color: var(--text); font-weight: 600; }
+  .status { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--sell); margin-right: 6px; }
+  .dot.on { background: var(--buy); }
+
+  main {
+    display: grid; gap: 12px; padding: 12px;
+    grid-template-columns: 280px minmax(0, 1fr) 280px;
+    grid-template-areas: "book chart trades" "book form trades";
+    grid-template-rows: minmax(360px, 1fr) auto;
+    height: calc(100vh - 58px); min-height: 640px;
+  }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; display: flex; flex-direction: column; min-height: 0; }
+  .panel h2 { margin: 0; padding: 10px 14px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; border-bottom: 1px solid var(--line); }
+  #book-panel { grid-area: book; }
+  #chart-panel { grid-area: chart; }
+  #form-panel { grid-area: form; }
+  #trades-panel { grid-area: trades; }
+
+  .cols { display: grid; grid-template-columns: 1fr 1fr; padding: 6px 14px; font-size: 11px; color: var(--muted); }
+  .cols span:last-child, .row span:last-child { text-align: right; }
+  .book-side { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+  #asks { justify-content: flex-end; }
+  .row { position: relative; display: grid; grid-template-columns: 1fr 1fr; padding: 2px 14px; cursor: pointer; }
+  .row:hover { background: rgba(255, 255, 255, 0.04); }
+  .row .bar { position: absolute; top: 0; bottom: 0; right: 0; pointer-events: none; }
+  .row.ask .price { color: var(--sell); }
+  .row.bid .price { color: var(--buy); }
+  .row.ask .bar { background: var(--sell-bg); }
+  .row.bid .bar { background: var(--buy-bg); }
+  .spread { padding: 8px 14px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; }
+  .spread .mid { font-size: 16px; font-weight: 700; }
+  .spread .stat { align-self: center; }
+
+  #chart { flex: 1; min-height: 0; }
+
+  #form-panel .body { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 14px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  input {
+    width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); font: inherit;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+  .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  button {
+    padding: 9px 10px; border: 0; border-radius: 6px; font: inherit; font-weight: 600;
+    cursor: pointer; color: #fff;
+  }
+  button:active { transform: translateY(1px); }
+  .buy { background: var(--buy); }
+  .sell { background: var(--sell); }
+  .ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  .ghost.buy-text { color: var(--buy); border-color: rgba(31, 191, 117, 0.5); }
+  .ghost.sell-text { color: var(--sell); border-color: rgba(240, 71, 91, 0.5); }
+  .msg { min-height: 20px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+
+  .mine { max-height: 150px; overflow-y: auto; }
+  .mine table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .mine th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 6px; }
+  .mine td { padding: 4px 6px; border-top: 1px solid var(--line); }
+  .mine td:last-child, .mine th:last-child { text-align: right; }
+  .mine button { padding: 3px 8px; font-size: 11px; background: transparent; border: 1px solid var(--line); color: var(--muted); }
+  .mine button:hover { color: var(--sell); border-color: var(--sell); }
+  .empty { color: var(--muted); font-size: 12px; padding: 6px; }
+
+  .tape { flex: 1; overflow: hidden; }
+  .tape .cols { grid-template-columns: 1fr 1fr 1fr; }
+  .trade { display: grid; grid-template-columns: 1fr 1fr 1fr; padding: 2px 14px; }
+  .trade span:nth-child(2) { text-align: right; }
+  .trade span:last-child { text-align: right; color: var(--muted); }
+  .trade.up span:first-child { color: var(--buy); }
+  .trade.down span:first-child { color: var(--sell); }
+  .trade.flash { animation: flash 0.6s ease-out; }
+  @keyframes flash { from { background: rgba(76, 141, 255, 0.25); } to { background: transparent; } }
+
+  @media (max-width: 900px) {
+    main {
+      grid-template-columns: 1fr;
+      grid-template-areas: "chart" "form" "book" "trades";
+      grid-template-rows: 320px auto 420px 360px;
+      height: auto;
+    }
+    #form-panel .body { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Match<span>box</span></div>
+  <div class="pair">MBX / EUR</div>
+  <div class="last num" id="last">—</div>
+  <div class="stat">Trades <b class="num" id="trade-count">0</b></div>
+  <div class="stat">Volume <b class="num" id="volume">0</b></div>
+  <div class="status"><span class="dot" id="dot"></span><span id="status">connecting…</span></div>
+</header>
+
+<main>
+  <section class="panel" id="book-panel">
+    <h2>Order book</h2>
+    <div class="cols"><span>Price (EUR)</span><span>Qty</span></div>
+    <div class="book-side" id="asks"></div>
+    <div class="spread">
+      <span class="mid num" id="mid">—</span>
+      <span class="stat">spread <b class="num" id="spread">—</b></span>
+    </div>
+    <div class="book-side" id="bids"></div>
+  </section>
+
+  <section class="panel" id="chart-panel">
+    <h2>Price · 5s candles</h2>
+    <div id="chart"></div>
+  </section>
+
+  <section class="panel" id="form-panel">
+    <h2>Place order</h2>
+    <div class="body">
+      <div>
+        <div class="fields">
+          <div><label for="price">Price (EUR)</label><input id="price" class="num" type="number" step="0.01" min="0.01" value="100.00"></div>
+          <div><label for="qty">Quantity</label><input id="qty" class="num" type="number" step="1" min="1" value="5"></div>
+        </div>
+        <div class="buttons">
+          <button class="buy" id="limit-buy">Buy limit</button>
+          <button class="sell" id="limit-sell">Sell limit</button>
+          <button class="ghost buy-text" id="market-buy">Market buy</button>
+          <button class="ghost sell-text" id="market-sell">Market sell</button>
+        </div>
+        <div class="msg" id="msg">Tip: click a price in the order book to copy it here.</div>
+      </div>
+      <div>
+        <label>My open orders</label>
+        <div class="mine" id="mine"><div class="empty">No open orders</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="trades-panel">
+    <h2>Trades</h2>
+    <div class="tape">
+      <div class="cols"><span>Price</span><span>Qty</span><span>Time</span></div>
+      <div id="tape"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+// Prices travel as integer ticks (1 tick = 1 cent); the UI shows EUR.
+const toEur = (ticks) => (ticks / 100).toFixed(2);
+const toTicks = (eur) => Math.round(Number(eur) * 100);
+
+const BOOK_ROWS = 14;
+const TAPE_ROWS = 60;
+const CANDLE_SECONDS = 5;
+
+const $ = (id) => document.getElementById(id);
+
+// ---------- chart ----------
+const chart = LightweightCharts.createChart($("chart"), {
+  layout: { background: { color: "transparent" }, textColor: "#7d8897" },
+  grid: { vertLines: { color: "#1d232d" }, horzLines: { color: "#1d232d" } },
+  rightPriceScale: { borderColor: "#232a35" },
+  timeScale: { borderColor: "#232a35", timeVisible: true, secondsVisible: true },
+  crosshair: { mode: 0 },
+  autoSize: true,
+});
+const candles = chart.addCandlestickSeries({
+  upColor: "#1fbf75", downColor: "#f0475b",
+  wickUpColor: "#1fbf75", wickDownColor: "#f0475b", borderVisible: false,
+  priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+});
+let candle = null;
+
+function addToChart(priceTicks) {
+  // the chart shows UTC, so shift by the local offset to display local time
+  const now = Math.floor(Date.now() / 1000) - new Date().getTimezoneOffset() * 60;
+  const bucket = now - (now % CANDLE_SECONDS);
+  const price = priceTicks / 100;
+  if (!candle || candle.time !== bucket) {
+    candle = { time: bucket, open: candle ? candle.close : price, high: price, low: price, close: price };
+    candle.high = Math.max(candle.open, price);
+    candle.low = Math.min(candle.open, price);
+  } else {
+    candle.high = Math.max(candle.high, price);
+    candle.low = Math.min(candle.low, price);
+    candle.close = price;
+  }
+  candles.update({ ...candle });
+}
+
+// ---------- state ----------
+let latestBook = null;       // newest snapshot, drawn on the next animation frame
+let bookDirty = false;
+let lastPrice = null;
+let tradeCount = 0;
+let volume = 0;
+const pending = [];          // orders sent, waiting for the server to assign an id
+const myOrders = new Map();  // id -> { side, price, remaining }
+const sentIds = new Set();   // every id the server assigned to us
+
+// ---------- websocket ----------
+let ws;
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { $("dot").classList.add("on"); $("status").textContent = "live"; };
+  ws.onclose = () => {
+    $("dot").classList.remove("on");
+    $("status").textContent = "disconnected, retrying…";
+    setTimeout(connect, 1000);
+  };
+  ws.onmessage = (e) => handle(JSON.parse(e.data));
+}
+
+function handle(msg) {
+  switch (msg.type) {
+    case "Snapshot":
+      latestBook = msg;
+      bookDirty = true;
+      break;
+    case "Trade":
+      onTrade(msg);
+      break;
+    case "Assigned": {
+      sentIds.add(msg.id);
+      const order = pending.shift();
+      if (order && order.kind === "Limit") {
+        myOrders.set(msg.id, { side: order.side, price: order.price, remaining: order.qty });
+        renderMine();
+      }
+      break;
+    }
+    case "Cancelled":
+    case "Rejected":
+      if (myOrders.delete(msg.id)) renderMine();
+      if (msg.type === "Rejected" && sentIds.has(msg.id)) note(`Order #${msg.id} rejected: ${msg.reason}`);
+      break;
+    case "Error":
+      note(`Server: ${msg.message}`);
+      break;
+  }
+}
+
+function onTrade(t) {
+  tradeCount += 1;
+  volume += t.qty;
+  const dir = lastPrice === null || t.price === lastPrice ? "" : (t.price > lastPrice ? "up" : "down");
+  lastPrice = t.price;
+
+  $("last").textContent = toEur(t.price);
+  $("last").style.color = dir === "down" ? "var(--sell)" : "var(--buy)";
+  $("trade-count").textContent = tradeCount.toLocaleString("en");
+  $("volume").textContent = volume.toLocaleString("en");
+
+  const row = document.createElement("div");
+  row.className = `trade num flash ${t.taker_side === "Buy" ? "up" : "down"}`;
+  row.innerHTML = `<span>${toEur(t.price)}</span><span>${t.qty}</span><span>${new Date().toLocaleTimeString("en-GB")}</span>`;
+  const tape = $("tape");
+  tape.prepend(row);
+  while (tape.children.length > TAPE_ROWS) tape.lastChild.remove();
+
+  addToChart(t.price);
+
+  // keep my open orders in sync
+  for (const id of [t.maker_id, t.taker_id]) {
+    const mine = myOrders.get(id);
+    if (!mine) continue;
+    mine.remaining -= t.qty;
+    if (mine.remaining <= 0) myOrders.delete(id);
+    renderMine();
+  }
+}
+
+// ---------- rendering ----------
+function renderBook() {
+  if (bookDirty && latestBook) {
+    bookDirty = false;
+    const asks = latestBook.asks.slice(0, BOOK_ROWS);
+    const bids = latestBook.bids.slice(0, BOOK_ROWS);
+    const maxQty = Math.max(1, ...asks.map((l) => l[1]), ...bids.map((l) => l[1]));
+
+    // asks: best (lowest) price next to the spread, so draw them reversed
+    $("asks").innerHTML = asks.slice().reverse().map((l) => levelRow("ask", l, maxQty)).join("");
+    $("bids").innerHTML = bids.map((l) => levelRow("bid", l, maxQty)).join("");
+
+    const bestAsk = asks[0] && asks[0][0];
+    const bestBid = bids[0] && bids[0][0];
+    if (bestAsk && bestBid) {
+      $("mid").textContent = toEur((bestAsk + bestBid) / 2);
+      $("spread").textContent = toEur(bestAsk - bestBid);
+    } else {
+      $("mid").textContent = "—";
+      $("spread").textContent = "—";
+    }
+  }
+  requestAnimationFrame(renderBook);
+}
+
+function levelRow(side, [price, qty], maxQty) {
+  const width = Math.round((qty / maxQty) * 100);
+  return `<div class="row ${side} num" data-price="${price}">
+    <div class="bar" style="width:${width}%"></div>
+    <span class="price">${toEur(price)}</span><span>${qty}</span>
+  </div>`;
+}
+
+function renderMine() {
+  if (myOrders.size === 0) {
+    $("mine").innerHTML = `<div class="empty">No open orders</div>`;
+    return;
+  }
+  const rows = [...myOrders].map(([id, o]) => `<tr>
+      <td class="num">#${id}</td>
+      <td style="color:var(--${o.side === "Buy" ? "buy" : "sell"})">${o.side}</td>
+      <td class="num">${toEur(o.price)}</td>
+      <td class="num">${o.remaining}</td>
+      <td><button data-cancel="${id}">Cancel</button></td>
+    </tr>`).join("");
+  $("mine").innerHTML = `<table><tr><th>Id</th><th>Side</th><th>Price</th><th>Left</th><th></th></tr>${rows}</table>`;
+}
+
+function note(text) { $("msg").textContent = text; }
+
+// ---------- actions ----------
+function send(msg, remember) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) { note("Not connected yet."); return; }
+  ws.send(JSON.stringify(msg));
+  if (remember) pending.push(remember);
+}
+
+function readQty() {
+  const qty = Math.floor(Number($("qty").value));
+  if (!(qty > 0)) { note("Quantity must be a positive whole number."); return null; }
+  return qty;
+}
+
+function placeLimit(side) {
+  const qty = readQty();
+  const price = toTicks($("price").value);
+  if (qty === null) return;
+  if (!(price > 0)) { note("Price must be positive."); return; }
+  send({ type: "Limit", side, price, qty }, { kind: "Limit", side, price, qty });
+  note(`Sent: ${side} ${qty} @ ${toEur(price)}`);
+}
+
+function placeMarket(side) {
+  const qty = readQty();
+  if (qty === null) return;
+  send({ type: "Market", side, qty }, { kind: "Market" });
+  note(`Sent: market ${side.toLowerCase()} ${qty}`);
+}
+
+$("limit-buy").onclick = () => placeLimit("Buy");
+$("limit-sell").onclick = () => placeLimit("Sell");
+$("market-buy").onclick = () => placeMarket("Buy");
+$("market-sell").onclick = () => placeMarket("Sell");
+
+// click a book level → copy its price into the form
+$("book-panel").addEventListener("click", (e) => {
+  const row = e.target.closest(".row");
+  if (row) $("price").value = toEur(Number(row.dataset.price));
+});
+
+// cancel buttons
+$("mine").addEventListener("click", (e) => {
+  const id = e.target.dataset.cancel;
+  if (!id) return;
+  send({ type: "Cancel", id: Number(id) });
+  note(`Cancel sent for #${id}`);
+});
+
+connect();
+requestAnimationFrame(renderBook);
+</script>
+</body>
+</html>
